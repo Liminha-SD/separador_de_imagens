@@ -87,11 +87,18 @@ if exist "dist\!APP_NAME!.exe" (
     if exist "build" rmdir /s /q "build"
     if exist "dist" rmdir /s /q "dist"
     if exist "!APP_NAME!.spec" del /q "!APP_NAME!.spec"
+    
+    echo [6/5] Removendo ambiente virtual...
+    call deactivate >nul 2>&1
+    if exist "!VENV_DIR!" rmdir /s /q "!VENV_DIR!"
+
     echo ====================================================
     echo   SUCESSO !APP_NAME!.exe pronto na raiz.
     echo ====================================================
 ) else (
     echo [ERRO] Falha na compilacao. Verifique se o PyInstaller funcionou.
+    call deactivate >nul 2>&1
+    if exist "!VENV_DIR!" rmdir /s /q "!VENV_DIR!"
 )
 
 echo.
