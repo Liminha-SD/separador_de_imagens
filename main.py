@@ -4,11 +4,14 @@ import shutil
 import numpy as np
 from PIL import Image
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-    QPushButton, QLabel, QFileDialog, QProgressBar, QTextEdit, QFrame
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QPushButton, QLabel, QFileDialog, QProgressBar, QTextEdit,
+    QGroupBox, QFrame, QStatusBar
 )
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QFont
+
+from dark_theme import apply_theme, set_default_font, COLORS
+
 
 class ClassifierWorker(QThread):
     progress = Signal(int)
@@ -30,14 +33,14 @@ class ClassifierWorker(QThread):
             import tensorflow as tf
             self.status.emit("Carregando o modelo do TensorFlow...")
             model = tf.keras.models.load_model(self.model_path)
-            
+
             input_shape = model.input_shape[1:3]
             if None in input_shape:
                 input_shape = (224, 224)
-            
+
             img_extensions = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
             files = [f for f in os.listdir(self.folder_path) if f.lower().endswith(img_extensions)]
-            
+
             if not files:
                 self.status.emit("Nenhuma imagem encontrada na pasta de origem.")
                 return
@@ -53,7 +56,7 @@ class ClassifierWorker(QThread):
                     break
 
                 img_path = os.path.join(self.folder_path, filename)
-                
+
                 try:
                     img = Image.open(img_path).convert('RGB')
                     img = img.resize((input_shape[1], input_shape[0]))
@@ -61,7 +64,7 @@ class ClassifierWorker(QThread):
                     img_array = np.expand_dims(img_array, axis=0)
 
                     prediction = model.predict(img_array, verbose=0)
-                    is_good = prediction[0][0] > 0.5 
+                    is_good = prediction[0][0] > 0.5
 
                     if is_good:
                         shutil.copy2(img_path, os.path.join(good_dir, filename))
@@ -80,141 +83,199 @@ class ClassifierWorker(QThread):
         finally:
             self.finished.emit()
 
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AI Image Sorter")
-        self.resize(800, 650)
+        self.resize(820, 700)
         self.folder_path = ""
         self.model_path = ""
         self.output_path = ""
         self.worker = None
 
         self.init_ui()
-        self.apply_style()
+        apply_theme(self)
 
     def init_ui(self):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setSpacing(15)
-        main_layout.setContentsMargins(30, 30, 30, 30)
+        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(30, 24, 30, 24)
 
-        selection_frame = QFrame()
-        selection_layout = QVBoxLayout(selection_frame)
-        
-        # Modelo
-        model_row = QHBoxLayout()
-        self.lbl_model = QLabel("Modelo: Nenhum arquivo selecionado")
-        btn_model = QPushButton("Selecionar Modelo")
-        btn_model.clicked.connect(self.select_model)
-        model_row.addWidget(self.lbl_model, 1)
-        model_row.addWidget(btn_model)
-        selection_layout.addLayout(model_row)
+        # --- Cabecalho ---
+        header = QVBoxLayout()
+        header.setSpacing(2)
+        title = QLabel("AI Image Sorter")
+        title.setObjectName("title")
+        subtitle = QLabel(
+            "Selecione um modelo treinado e as pastas de origem e destino. "
+            "As imagens classificadas como boas serao copiadas para a subpasta \"boas\"."
+        )
+        subtitle.setObjectName("subtitle")
+        subtitle.setWordWrap(True)
+        header.addWidget(title)
+        header.addWidget(subtitle)
+        main_layout.addLayout(header)
 
-        # Entrada
-        input_row = QHBoxLayout()
-        self.lbl_folder = QLabel("Origem: Nenhuma pasta selecionada")
-        btn_folder = QPushButton("Pasta de Origem")
-        btn_folder.clicked.connect(self.select_folder)
-        input_row.addWidget(self.lbl_folder, 1)
-        input_row.addWidget(btn_folder)
-        selection_layout.addLayout(input_row)
+        separator = QFrame()
+        separator.setObjectName("separator")
+        separator.setFrameShape(QFrame.HLine)
+        main_layout.addWidget(separator)
 
-        # Saida
-        output_row = QHBoxLayout()
-        self.lbl_output = QLabel("Destino: Nenhuma pasta selecionada")
-        btn_output = QPushButton("Pasta de Destino")
-        btn_output.clicked.connect(self.select_output)
-        output_row.addWidget(self.lbl_output, 1)
-        output_row.addWidget(btn_output)
-        selection_layout.addLayout(output_row)
+        # --- Configuracao (passos numerados) ---
+        config_group = QGroupBox("Configuracao")
+        config_layout = QVBoxLayout(config_group)
+        config_layout.setSpacing(12)
+        config_layout.setContentsMargins(16, 18, 16, 16)
 
-        main_layout.addWidget(selection_frame)
+        self.lbl_model = QLabel("Nenhum arquivo selecionado")
+        self.lbl_folder = QLabel("Nenhuma pasta selecionada")
+        self.lbl_output = QLabel("Nenhuma pasta selecionada")
+
+        config_layout.addLayout(self._build_step_row(
+            "1", "Modelo (.keras / .h5)", self.lbl_model,
+            "Selecionar", self.select_model,
+            "Arquivo do modelo treinado que decide se a imagem e boa ou ruim."
+        ))
+        config_layout.addLayout(self._build_step_row(
+            "2", "Pasta de origem", self.lbl_folder,
+            "Escolher pasta", self.select_folder,
+            "Pasta que contem as imagens a serem classificadas."
+        ))
+        config_layout.addLayout(self._build_step_row(
+            "3", "Pasta de destino", self.lbl_output,
+            "Escolher pasta", self.select_output,
+            "Onde a subpasta \"boas\" sera criada com as imagens aprovadas."
+        ))
+
+        main_layout.addWidget(config_group)
+
+        # --- Progresso ---
+        progress_group = QGroupBox("Progresso")
+        progress_layout = QVBoxLayout(progress_group)
+        progress_layout.setContentsMargins(16, 18, 16, 16)
+        progress_layout.setSpacing(10)
 
         self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedHeight(10)
         self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(False)
-        main_layout.addWidget(self.progress_bar)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%p%")
+        progress_layout.addWidget(self.progress_bar)
 
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
-        self.log_output.setPlaceholderText("Logs de processamento...")
-        main_layout.addWidget(self.log_output)
+        self.log_output.setPlaceholderText("Os logs de processamento aparecerao aqui...")
+        progress_layout.addWidget(self.log_output)
 
-        # Botoes de Controle
+        main_layout.addWidget(progress_group, 1)
+
+        # --- Botoes de Controle ---
         control_layout = QHBoxLayout()
-        
-        self.btn_start = QPushButton("INICIAR")
-        self.btn_start.setObjectName("btn_start")
-        self.btn_start.setFixedHeight(45)
-        self.btn_start.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        control_layout.setSpacing(12)
+
+        self.btn_start = QPushButton("Iniciar classificacao")
+        self.btn_start.setFixedHeight(46)
+        self.btn_start.setCursor(Qt.PointingHandCursor)
+        self.btn_start.setToolTip("Comeca a classificar as imagens da pasta de origem.")
         self.btn_start.clicked.connect(self.start_classification)
-        
-        self.btn_stop = QPushButton("PARAR")
-        self.btn_stop.setObjectName("btn_stop")
-        self.btn_stop.setFixedHeight(45)
-        self.btn_stop.setFont(QFont("Segoe UI", 10, QFont.Bold))
+
+        self.btn_stop = QPushButton("Parar")
+        self.btn_stop.setObjectName("danger")
+        self.btn_stop.setFixedHeight(46)
+        self.btn_stop.setCursor(Qt.PointingHandCursor)
+        self.btn_stop.setToolTip("Interrompe o processamento em andamento.")
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self.stop_classification)
-        
+
         control_layout.addWidget(self.btn_start, 2)
         control_layout.addWidget(self.btn_stop, 1)
         main_layout.addLayout(control_layout)
 
-    def apply_style(self):
-        self.setStyleSheet("""
-            QMainWindow { background-color: #0F0F0F; }
-            QWidget { color: #FFFFFF; font-family: 'Segoe UI'; }
-            QFrame { background-color: #1A1A1A; border-radius: 6px; padding: 10px; }
-            QLabel { font-size: 12px; color: #BBBBBB; }
-            QPushButton { 
-                background-color: #2D2D2D; 
-                border: 1px solid #3D3D3D; 
-                padding: 8px; 
-                border-radius: 4px; 
-                min-width: 120px;
-            }
-            QPushButton:hover { background-color: #3D3D3D; border-color: #019DEA; }
-            QPushButton#btn_start { background-color: #019DEA; border: none; }
-            QPushButton#btn_start:hover { background-color: #0186C4; }
-            QPushButton#btn_stop { background-color: #C40101; border: none; }
-            QPushButton#btn_stop:hover { background-color: #A30101; }
-            QPushButton:disabled { background-color: #222222; color: #444444; }
-            QProgressBar { background-color: #1A1A1A; border-radius: 5px; }
-            QProgressBar::chunk { background-color: #019DEA; border-radius: 5px; }
-            QTextEdit { 
-                background-color: #1A1A1A; 
-                color: #A0A0A0; 
-                border: 1px solid #2D2D2D; 
-                border-radius: 6px; 
-                font-family: 'Consolas'; 
-                font-size: 11px; 
-            }
-        """)
+        # --- Barra de status ---
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_bar.showMessage("Pronto. Complete os 3 passos para iniciar.")
+
+    def _build_step_row(self, number, label_text, value_label, button_text, on_click, tooltip):
+        """Monta uma linha de passo: [n] Titulo / valor selecionado / botao."""
+        row = QHBoxLayout()
+        row.setSpacing(12)
+
+        badge = QLabel(number)
+        badge.setObjectName("stepBadge")
+        badge.setFixedSize(26, 26)
+        badge.setAlignment(Qt.AlignCenter)
+        badge.setStyleSheet(
+            f"background-color: {COLORS['accent']}; color: white; "
+            f"border-radius: 13px; font-weight: bold;"
+        )
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(1)
+        caption = QLabel(label_text)
+        caption.setStyleSheet("font-weight: bold; background: transparent;")
+        value_label.setObjectName("subtitle")
+        value_label.setToolTip(tooltip)
+        text_col.addWidget(caption)
+        text_col.addWidget(value_label)
+
+        button = QPushButton(button_text)
+        button.setObjectName("secondary")
+        button.setCursor(Qt.PointingHandCursor)
+        button.setMinimumWidth(130)
+        button.setToolTip(tooltip)
+        button.clicked.connect(on_click)
+
+        row.addWidget(badge)
+        row.addLayout(text_col, 1)
+        row.addWidget(button)
+        return row
+
+    def _mark_selected(self, label, text):
+        """Marca o valor como selecionado destacando-o com a cor de destaque."""
+        label.setText(text)
+        label.setStyleSheet(f"color: {COLORS['accent']}; background: transparent;")
 
     def select_model(self):
         file, _ = QFileDialog.getOpenFileName(self, "Selecionar Modelo", "", "Keras Model (*.keras *.h5)")
         if file:
             self.model_path = file
-            self.lbl_model.setText(f"Modelo: {os.path.basename(file)}")
+            self._mark_selected(self.lbl_model, os.path.basename(file))
+            self._update_ready_status()
 
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Selecionar Origem")
         if folder:
             self.folder_path = folder
-            self.lbl_folder.setText(f"Origem: {os.path.basename(folder)}")
+            self._mark_selected(self.lbl_folder, folder)
+            self._update_ready_status()
 
     def select_output(self):
         folder = QFileDialog.getExistingDirectory(self, "Selecionar Destino")
         if folder:
             self.output_path = folder
-            self.lbl_output.setText(f"Destino: {os.path.basename(folder)}")
+            self._mark_selected(self.lbl_output, folder)
+            self._update_ready_status()
+
+    def _update_ready_status(self):
+        missing = []
+        if not self.model_path:
+            missing.append("modelo")
+        if not self.folder_path:
+            missing.append("origem")
+        if not self.output_path:
+            missing.append("destino")
+        if missing:
+            self.status_bar.showMessage("Falta selecionar: " + ", ".join(missing) + ".")
+        else:
+            self.status_bar.showMessage("Tudo pronto. Clique em \"Iniciar classificacao\".")
 
     def start_classification(self):
         if not all([self.model_path, self.folder_path, self.output_path]):
             self.log_output.append("Erro: Selecione modelo, pasta de origem e pasta de destino.")
+            self._update_ready_status()
             return
 
         self.btn_start.setEnabled(False)
@@ -222,6 +283,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.log_output.clear()
         self.log_output.append("Iniciando processamento...")
+        self.status_bar.showMessage("Processando...")
 
         self.worker = ClassifierWorker(self.folder_path, self.model_path, self.output_path)
         self.worker.progress.connect(self.progress_bar.setValue)
@@ -233,13 +295,17 @@ class MainWindow(QMainWindow):
         if self.worker:
             self.worker.stop()
             self.btn_stop.setEnabled(False)
+            self.status_bar.showMessage("Interrompendo...")
 
     def on_finished(self):
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
+        self.status_bar.showMessage("Concluido.")
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    set_default_font(app)
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
